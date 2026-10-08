@@ -6,7 +6,7 @@ function createWindow() {
     width: 1200,
     height: 850,
     autoHideMenuBar: true,
-    title: 'GNGS Sound Machine',
+    title: 'gngs-sound-machine',
     webPreferences: { autoplayPolicy: 'no-user-gesture-required' }
   });
   win.loadFile(path.join(__dirname, 'GNGS-SOUND-MACHINE.html'));

@@ -1,7 +1,7 @@
 {
   "name": "gngs-sound-machine",
   "version": "1.0.0",
-  "description": "GNGS Sound Machine",
+  "description": "gngs-sound-machine",
   "main": "main.js",
   "scripts": {
   "start": "electron .",
@@ -13,7 +13,7 @@
   },
   "build": {
     "appId": "com.gngs.soundmachine",
-    "productName": "GNGS Sound Machine",
+    "productName": "gngs-sound-machine",
     "files": ["main.js", "GNGS-SOUND-MACHINE.html"],
     "win": { "target": "portable" }
   }
