@@ -1,21 +1,20 @@
 {
   "name": "gngs-sound-machine",
   "version": "1.0.0",
-  "description": "gngs-sound-machine",
+  "description": "GNGS Sound Machine",
   "main": "main.js",
   "scripts": {
-  "start": "electron .",
-  "build": "electron-builder --win portable --publish never"
-}},
+    "start": "electron .",
+    "build": "electron-builder --win portable --publish never"
+  },
   "devDependencies": {
     "electron": "^31.0.0",
     "electron-builder": "^24.13.3"
   },
   "build": {
     "appId": "com.gngs.soundmachine",
-    "productName": "gngs-sound-machine",
+    "productName": "GNGS Sound Machine",
     "files": ["main.js", "GNGS-SOUND-MACHINE.html"],
     "win": { "target": "portable" }
   }
 }
-
