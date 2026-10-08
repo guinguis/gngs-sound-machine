@@ -1,0 +1,30 @@
+name: Build EXE
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Descargar el código
+        uses: actions/checkout@v4
+
+      - name: Instalar Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Instalar dependencias
+        run: npm install
+
+      - name: Compilar
+        run: npm run build
+
+      - name: Guardar el .exe
+        uses: actions/upload-artifact@v4
+        with:
+          name: GNGS-Sound-Machine
+          path: dist/*.exe
