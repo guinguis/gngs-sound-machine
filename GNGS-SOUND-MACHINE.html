@@ -55,11 +55,15 @@ input[type=range]{accent-color:var(--accent);width:130px}
 .pad::after{content:"";position:absolute;inset:auto -30px -55px auto;width:120px;height:120px;
   border-radius:50%;background:var(--c);opacity:.12;filter:blur(5px)}
 .pad:active,.pad.active{transform:scale(.97);border-color:var(--c);box-shadow:0 0 0 2px var(--c)44,0 8px 30px #0006}
-.pad-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;}
+.pad-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;gap:6px}
+.pad-actions{display:flex;gap:6px;align-items:center}
 .key{font-size:13px;color:var(--c);font-weight:900;background:#fff1;padding:5px 8px;border-radius:7px;display:inline-block}
 .pad-upload{font-size:11px;background:#fff1;padding:5px 8px;border-radius:6px;color:var(--muted);cursor:pointer;transition:.12s;}
 .pad-upload:hover{background:var(--c);color:#fff;}
 .pad-upload input{display:none;}
+.pad-del{font-size:11px;background:#fff1;padding:5px 8px;border-radius:6px;color:var(--muted);cursor:pointer;transition:.12s;border:0;font-weight:700}
+.pad-del:hover{background:#c93458;color:#fff;transform:none;filter:none}
+.pad.has-audio .key::after{content:" ●";color:#10b981}
 .icon{font-size:30px;margin:8px 0 4px}
 .name{font-size:17px;font-weight:800;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
 .hint{font-size:12px;color:var(--muted);margin-top:4px}
@@ -82,10 +86,10 @@ input[type=range]{accent-color:var(--accent);width:130px}
   <div class="controls">
     <button class="stop" onclick="stopAll()">⏹ Detener (Esc)</button>
     <button class="main" onclick="testSound()">🔊 Prueba</button>
-    <button class="save-btn" onclick="saveConfig()">💾 Guardar Nombres</button>
+    <button class="save-btn" onclick="saveConfig()">💾 Guardar Configuración</button>
     <label class="file-label" style="background:#0284c7;">
-      📂 Cargar Nombres
-      <input type="file" accept=".json" onchange="loadConfig(event)">
+      📂 Cargar Configuración
+      <input type="file" accept=".gngs,.json" onchange="loadConfig(event)">
     </label>
     <div class="volume">🔉 <input id="volume" type="range" min="0" max="1" value=".8" step=".01"><span id="volText">80%</span></div>
   </div>
@@ -95,11 +99,13 @@ input[type=range]{accent-color:var(--accent);width:130px}
 <div class="pages-nav" id="pagesNav"></div>
 
 <div class="board" id="board"></div>
-<div id="status">Carga tus audios en cada botón (MP3, WAV, OGG).</div>
+<div id="status">Carga tus audios en cada botón (MP3, WAV, OGG). Se guardan automáticamente.</div>
 
 <div class="help">
   <b>⌨️ Teclado:</b> Números 1 al 8 para cambiar de página. Q W E R / A S D F / Z X C V para reproducir. 
   <br><b>⏹️ Detener:</b> Presiona la tecla <b>Esc</b> (Escape) o la barra espaciadora para cortar todos los audios al instante.
+  <br><b>💾 Guardado automático:</b> los audios que cargues y sus nombres quedan guardados en esta app y se restauran al abrirla de nuevo. Los botones con audio propio muestran un punto verde ● y una ✕ para quitarlo.
+  <br><b>📦 Configuración:</b> "Guardar Configuración" genera un archivo <b>.gngs</b> con todos tus audios y nombres, para respaldarlo o llevarlo a otra PC. "Cargar Configuración" lo restaura (reemplaza lo actual).
 </div>
 </div>
 
@@ -126,8 +132,137 @@ const defaultPadTemplate = [
 
 const pagesData = Array.from({length: 8}, () => ({
   custom: Array(12).fill(null),
+  raw: Array(12).fill(null),
   customNames: Array(12).fill(null)
 }));
+
+/* ============================================================
+   PERSISTENCIA (IndexedDB)
+   Guarda una copia de cada audio cargado + los nombres.
+   Funciona igual en el navegador y dentro del .exe (Electron).
+   ============================================================ */
+const DB_NAME = "gngs-sound-machine";
+const DB_VERSION = 1;
+let dbPromise = null;
+
+function openDB(){
+  if(dbPromise) return dbPromise;
+  dbPromise = new Promise((resolve, reject) => {
+    const req = indexedDB.open(DB_NAME, DB_VERSION);
+    req.onupgradeneeded = () => {
+      const db = req.result;
+      if(!db.objectStoreNames.contains("sounds")) db.createObjectStore("sounds");
+      if(!db.objectStoreNames.contains("meta")) db.createObjectStore("meta");
+    };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+  return dbPromise;
+}
+
+async function dbPut(store, key, value){
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(store, "readwrite");
+    tx.objectStore(store).put(value, key);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+    tx.onabort = () => reject(tx.error);
+  });
+}
+
+async function dbDelete(store, key){
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(store, "readwrite");
+    tx.objectStore(store).delete(key);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
+async function dbClear(store){
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(store, "readwrite");
+    tx.objectStore(store).clear();
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
+async function dbGet(store, key){
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const req = db.transaction(store, "readonly").objectStore(store).get(key);
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+async function dbGetAll(store){
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const out = [];
+    const req = db.transaction(store, "readonly").objectStore(store).openCursor();
+    req.onsuccess = () => {
+      const cur = req.result;
+      if(cur){ out.push({ key: cur.key, value: cur.value }); cur.continue(); }
+      else resolve(out);
+    };
+    req.onerror = () => reject(req.error);
+  });
+}
+
+function saveNamesToDB(){
+  return dbPut("meta", "names", pagesData.map(p => p.customNames))
+    .catch(err => console.warn("No se pudieron guardar los nombres:", err));
+}
+
+async function restoreSaved(){
+  const status = document.getElementById("status");
+  try {
+    if(!audioCtx) init();
+
+    const names = await dbGet("meta", "names");
+    if(Array.isArray(names)){
+      names.forEach((arr, p) => {
+        if(pagesData[p] && Array.isArray(arr)){
+          pagesData[p].customNames = Array.from({length: 12}, (_, i) => arr[i] || null);
+        }
+      });
+    }
+
+    const all = await dbGetAll("sounds");
+    let loaded = 0;
+    for(const { key, value } of all){
+      const [p, i] = String(key).split("-").map(Number);
+      if(!pagesData[p] || i < 0 || i > 11 || !value || !value.data) continue;
+      try {
+        const buf = await audioCtx.decodeAudioData(value.data.slice(0));
+        pagesData[p].custom[i] = buf;
+        pagesData[p].raw[i] = value.data;
+        if(!pagesData[p].customNames[i]) pagesData[p].customNames[i] = value.name || null;
+        loaded++;
+      } catch(e) {
+        console.warn("No se pudo restaurar el audio", key, e);
+      }
+    }
+
+    renderBoard();
+    status.textContent = loaded > 0
+      ? `Se restauraron ${loaded} audio(s) guardados.`
+      : "Carga tus audios en cada botón (MP3, WAV, OGG). Se guardan automáticamente.";
+
+    // Pide al navegador no borrar estos datos automáticamente
+    if(navigator.storage && navigator.storage.persist) navigator.storage.persist();
+  } catch(err) {
+    console.warn("No se pudo acceder al almacenamiento:", err);
+    status.textContent = "No se pudo acceder al guardado automático; los audios solo durarán esta sesión.";
+  }
+}
+
+/* ============================================================ */
 
 function init(){
   audioCtx = new (window.AudioContext || window.webkitAudioContext)();
@@ -139,6 +274,10 @@ function init(){
 function ensure(){ 
   if(!audioCtx) init(); 
   if(audioCtx.state === "suspended") audioCtx.resume(); 
+}
+
+function esc(s){
+  return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
 }
 
 function switchPage(pageIndex){
@@ -260,19 +399,23 @@ function renderBoard(){
   
   defaultPadTemplate.forEach((p, i) => {
     const d = document.createElement("div");
-    d.className = "pad";
+    const hasAudio = !!page.custom[i];
+    d.className = "pad" + (hasAudio ? " has-audio" : "");
     const hue = (i * 31 + currentPage * 25 + 200) % 360;
     d.style.setProperty("--c", "hsl(" + hue + " 90% 65%)");
     
-    const displayName = page.customNames[i] || p[2];
+    const displayName = esc(page.customNames[i] || p[2]);
 
     d.innerHTML = `
       <div class="pad-header">
         <span class="key">${p[0]}</span>
-        <label class="pad-upload">
-          📁 Cargar
-          <input type="file" accept="audio/*" onchange="loadPadAudio(event, ${i})">
-        </label>
+        <div class="pad-actions">
+          ${hasAudio ? `<button class="pad-del" title="Quitar audio" onclick="clearPad(${i})">✕</button>` : ""}
+          <label class="pad-upload">
+            📁 Cargar
+            <input type="file" accept="audio/*" onchange="loadPadAudio(event, ${i})">
+          </label>
+        </div>
       </div>
       <div class="icon">${p[1]}</div>
       <div class="name" title="${displayName}">${displayName}</div>
@@ -280,9 +423,8 @@ function renderBoard(){
     `;
 
     d.onclick = (e) => {
-      if(e.target.tagName !== 'INPUT' && e.target.tagName !== 'LABEL') {
-        playPad(i);
-      }
+      if(e.target.closest(".pad-upload, .pad-del")) return;
+      playPad(i);
     };
 
     b.appendChild(d);
@@ -294,15 +436,31 @@ async function loadPadAudio(e, i){
   const file = e.target.files[0];
   if(!file) return;
 
+  const pageIdx = currentPage; // por si cambias de página mientras carga
+
   try {
     const arrayBuffer = await file.arrayBuffer();
+    const raw = arrayBuffer.slice(0); // copia: decodeAudioData consume el original
     const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
-    
-    const page = pagesData[currentPage];
+    const cleanName = file.name.replace(/\.[^/.]+$/, "");
+
+    const page = pagesData[pageIdx];
     page.custom[i] = audioBuffer;
-    page.customNames[i] = file.name.replace(/\.[^/.]+$/, ""); 
-    
-    document.getElementById("status").textContent = `Audio "${file.name}" cargado con éxito en Pág ${currentPage+1}.`;
+    page.raw[i] = raw;
+    page.customNames[i] = cleanName;
+
+    let saved = true;
+    try {
+      await dbPut("sounds", `${pageIdx}-${i}`, { name: cleanName, fileName: file.name, data: raw });
+      await saveNamesToDB();
+    } catch(dbErr) {
+      saved = false;
+      console.warn("No se pudo guardar el audio:", dbErr);
+    }
+
+    document.getElementById("status").textContent = saved
+      ? `Audio "${file.name}" cargado y guardado en Pág ${pageIdx + 1}.`
+      : `Audio "${file.name}" cargado en Pág ${pageIdx + 1}, pero no se pudo guardar (solo dura esta sesión).`;
     renderBoard(); 
   } catch(err) {
     alert("Error al procesar el archivo de audio. Verifica que sea un formato compatible (MP3, WAV, OGG).");
@@ -310,42 +468,163 @@ async function loadPadAudio(e, i){
   e.target.value = "";
 }
 
-function saveConfig(){
-  const exportData = pagesData.map(page => ({
-    customNames: page.customNames
-  }));
-
-  const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(exportData));
-  const downloadAnchor = document.createElement('a');
-  downloadAnchor.setAttribute("href", dataStr);
-  downloadAnchor.setAttribute("download", "gngs_sound_machine_nombres.json");
-  document.body.appendChild(downloadAnchor);
-  downloadAnchor.click();
-  downloadAnchor.remove();
-  
-  document.getElementById("status").textContent = "¡Nombres de configuración guardados con éxito!";
+async function clearPad(i){
+  const pageIdx = currentPage;
+  const page = pagesData[pageIdx];
+  stopAll();
+  page.custom[i] = null;
+  page.raw[i] = null;
+  page.customNames[i] = null;
+  try {
+    await dbDelete("sounds", `${pageIdx}-${i}`);
+    await saveNamesToDB();
+  } catch(err) {
+    console.warn("No se pudo borrar del guardado:", err);
+  }
+  document.getElementById("status").textContent = `Audio quitado del botón ${defaultPadTemplate[i][0]} (Pág ${pageIdx + 1}).`;
+  renderBoard();
 }
 
-function loadConfig(e){
+/* ============================================================
+   GUARDAR / CARGAR CONFIGURACIÓN
+   Archivo .gngs único con nombres + audios incluidos.
+   Formato: "GNGS" + largo del encabezado (4 bytes) + encabezado JSON
+   + bytes de cada audio, uno detrás de otro.
+   ============================================================ */
+const CFG_MAGIC = "GNGS";
+
+function saveConfig(){
+  const status = document.getElementById("status");
+  const sounds = [];
+  const chunks = [];
+
+  pagesData.forEach((page, p) => {
+    page.raw.forEach((raw, i) => {
+      if(!raw) return;
+      sounds.push({ page: p, index: i, name: page.customNames[i] || null, size: raw.byteLength });
+      chunks.push(raw);
+    });
+  });
+
+  const header = JSON.stringify({
+    version: 1,
+    names: pagesData.map(pg => pg.customNames),
+    sounds: sounds
+  });
+  const enc = new TextEncoder();
+  const headerBytes = enc.encode(header);
+  const prefix = new Uint8Array(8);
+  prefix.set(enc.encode(CFG_MAGIC), 0);
+  new DataView(prefix.buffer).setUint32(4, headerBytes.length, true);
+
+  const blob = new Blob([prefix, headerBytes, ...chunks], { type: "application/octet-stream" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "gngs_sound_machine_config.gngs";
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 10000);
+
+  status.textContent = `Configuración guardada: ${sounds.length} audio(s) y todos los nombres incluidos.`;
+}
+
+async function loadConfig(e){
   const file = e.target.files[0];
   if(!file) return;
+  const status = document.getElementById("status");
 
-  const reader = new FileReader();
-  reader.onload = function(event) {
+  let buf;
+  try {
+    buf = await file.arrayBuffer();
+  } catch(err) {
+    alert("No se pudo leer el archivo.");
+    e.target.value = "";
+    return;
+  }
+  e.target.value = "";
+  const bytes = new Uint8Array(buf);
+  const dec = new TextDecoder();
+
+  // Compatibilidad con archivos viejos de solo nombres (.json)
+  if(bytes[0] === 0x5B){
     try {
-      const importedData = JSON.parse(event.target.result);
-      for (let pIdx = 0; pIdx < importedData.length; pIdx++) {
-        if(pIdx >= pagesData.length) break;
-        pagesData[pIdx].customNames = importedData[pIdx].customNames || Array(12).fill(null);
-      }
+      const imported = JSON.parse(dec.decode(bytes));
+      imported.forEach((item, p) => {
+        if(!pagesData[p]) return;
+        const arr = (item && item.customNames) || [];
+        pagesData[p].customNames = Array.from({length: 12}, (_, i) => arr[i] || null);
+      });
+      await saveNamesToDB();
       renderBoard();
-      document.getElementById("status").textContent = "¡Nombres restaurados con éxito!";
+      status.textContent = "Nombres restaurados (archivo antiguo, sin audios).";
     } catch(err) {
       alert("El archivo JSON no es válido.");
     }
-  };
-  reader.readAsText(file);
-  e.target.value = "";
+    return;
+  }
+
+  let header, offset;
+  try {
+    if(bytes.length < 8 || dec.decode(bytes.subarray(0, 4)) !== CFG_MAGIC) throw new Error("magic");
+    const hlen = new DataView(buf).getUint32(4, true);
+    header = JSON.parse(dec.decode(bytes.subarray(8, 8 + hlen)));
+    offset = 8 + hlen;
+  } catch(err) {
+    alert("El archivo no es una configuración válida de GNGS Sound Machine.");
+    return;
+  }
+
+  const hasAudio = pagesData.some(pg => pg.raw.some(Boolean));
+  if(hasAudio && !confirm("Cargar la configuración reemplazará los audios y nombres actuales. ¿Continuar?")) return;
+
+  ensure();
+  stopAll();
+  status.textContent = "Cargando configuración...";
+
+  pagesData.forEach(pg => {
+    pg.custom.fill(null);
+    pg.raw.fill(null);
+    pg.customNames.fill(null);
+  });
+  try { await dbClear("sounds"); } catch(err) { console.warn(err); }
+
+  if(Array.isArray(header.names)){
+    header.names.forEach((arr, p) => {
+      if(pagesData[p] && Array.isArray(arr)){
+        pagesData[p].customNames = Array.from({length: 12}, (_, i) => arr[i] || null);
+      }
+    });
+  }
+
+  let ok = 0, fail = 0;
+  for(const s of (header.sounds || [])){
+    const size = Number(s.size) || 0;
+    const raw = buf.slice(offset, offset + size);
+    offset += size;
+
+    const pg = pagesData[s.page];
+    if(!pg || s.index < 0 || s.index > 11 || raw.byteLength !== size){ fail++; continue; }
+
+    try {
+      pg.custom[s.index] = await audioCtx.decodeAudioData(raw.slice(0));
+      pg.raw[s.index] = raw;
+      if(!pg.customNames[s.index]) pg.customNames[s.index] = s.name || null;
+      try {
+        await dbPut("sounds", `${s.page}-${s.index}`, { name: pg.customNames[s.index], data: raw });
+      } catch(dbErr) {
+        console.warn("No se pudo guardar en el almacenamiento interno:", dbErr);
+      }
+      ok++;
+    } catch(err) {
+      fail++;
+    }
+  }
+
+  await saveNamesToDB();
+  renderBoard();
+  status.textContent = `Configuración cargada: ${ok} audio(s) restaurados` + (fail ? `, ${fail} con error.` : ".");
 }
 
 document.getElementById("volume").oninput = e => {
@@ -373,6 +652,7 @@ document.addEventListener("keydown", e => {
 
 renderPagesNav();
 renderBoard();
+restoreSaved();
 </script>
 </body>
 </html>
